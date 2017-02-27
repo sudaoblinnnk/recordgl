@@ -16,6 +16,7 @@
 
 package com.android.grafika;
 
+import android.graphics.SurfaceTexture;
 import android.opengl.GLES20;
 import android.opengl.GLES30;
 import android.opengl.Matrix;
@@ -26,8 +27,8 @@ import android.os.Message;
 import android.util.Log;
 import android.view.Choreographer;
 import android.view.Surface;
-import android.view.SurfaceHolder;
-import android.view.SurfaceView;
+//import android.view.SurfaceView;
+import android.view.TextureView;
 import android.view.View;
 import android.widget.Button;
 import android.widget.RadioButton;
@@ -93,7 +94,7 @@ import java.lang.ref.WeakReference;
  * <p>
  * TODO: show the MP4 file name somewhere in the UI so people can find it in the player
  */
-public class RecordFBOActivity extends Activity implements SurfaceHolder.Callback,
+public class RecordFBOActivity extends Activity implements TextureView.SurfaceTextureListener,
         Choreographer.FrameCallback {
     private static final String TAG = MainActivity.TAG;
 
@@ -104,7 +105,7 @@ public class RecordFBOActivity extends Activity implements SurfaceHolder.Callbac
     private static final int RECMETHOD_FBO = 1;
     private static final int RECMETHOD_BLIT_FRAMEBUFFER = 2;
 
-    private boolean mRecordingEnabled = false;          // controls button state
+    private boolean mRecordingEnabled = true;          // controls button state
     private boolean mBlitFramebufferAllowed = false;    // requires GLES3
     private int mSelectedRecordMethod;                  // current radio button
 
@@ -113,13 +114,13 @@ public class RecordFBOActivity extends Activity implements SurfaceHolder.Callbac
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        setContentView(R.layout.activity_record_fbo);
+        setContentView(R.layout.activity_record_fbo_texture);
 
-        mSelectedRecordMethod = RECMETHOD_FBO;
+        mSelectedRecordMethod = RECMETHOD_DRAW_TWICE;
         updateControls();
 
-        SurfaceView sv = (SurfaceView) findViewById(R.id.fboActivity_surfaceView);
-        sv.getHolder().addCallback(this);
+        TextureView sv = (TextureView) findViewById(R.id.fboActivity_surfaceView);
+        sv.setSurfaceTextureListener(this);
 
         Log.d(TAG, "RecordFBOActivity: onCreate done");
     }
@@ -152,68 +153,6 @@ public class RecordFBOActivity extends Activity implements SurfaceHolder.Callbac
         updateControls();
     }
 
-    @Override
-    public void surfaceCreated(SurfaceHolder holder) {
-        Log.d(TAG, "surfaceCreated holder=" + holder);
-
-        File outputFile = new File(getFilesDir(), "fbo-gl-recording.mp4");
-        SurfaceView sv = (SurfaceView) findViewById(R.id.fboActivity_surfaceView);
-        mRenderThread = new RenderThread(sv.getHolder(), new ActivityHandler(this), outputFile,
-                MiscUtils.getDisplayRefreshNsec(this));
-        mRenderThread.setName("RecordFBO GL render");
-        mRenderThread.start();
-        mRenderThread.waitUntilReady();
-        mRenderThread.setRecordMethod(mSelectedRecordMethod);
-
-        RenderHandler rh = mRenderThread.getHandler();
-        if (rh != null) {
-            rh.sendSurfaceCreated();
-        }
-
-        // start the draw events
-        Choreographer.getInstance().postFrameCallback(this);
-    }
-
-    @Override
-    public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
-        Log.d(TAG, "surfaceChanged fmt=" + format + " size=" + width + "x" + height +
-                " holder=" + holder);
-        RenderHandler rh = mRenderThread.getHandler();
-        if (rh != null) {
-            rh.sendSurfaceChanged(format, width, height);
-        }
-    }
-
-    @Override
-    public void surfaceDestroyed(SurfaceHolder holder) {
-        Log.d(TAG, "surfaceDestroyed holder=" + holder);
-
-        // We need to wait for the render thread to shut down before continuing because we
-        // don't want the Surface to disappear out from under it mid-render.  The frame
-        // notifications will have been stopped back in onPause(), but there might have
-        // been one in progress.
-        //
-        // TODO: the RenderThread doesn't currently wait for the encoder / muxer to stop,
-        //       so we can't use this as an indication that the .mp4 file is complete.
-
-        RenderHandler rh = mRenderThread.getHandler();
-        if (rh != null) {
-            rh.sendShutdown();
-            try {
-                mRenderThread.join();
-            } catch (InterruptedException ie) {
-                // not expected
-                throw new RuntimeException("join was interrupted", ie);
-            }
-        }
-        mRenderThread = null;
-        mRecordingEnabled = false;
-
-        // If the callback was posted, remove it.  Without this, we could get one more
-        // call on doFrame().
-        Choreographer.getInstance().removeFrameCallback(this);
-        Log.d(TAG, "surfaceDestroyed complete");
-    }
 
     /*
      * Choreographer callback, called near vsync.
@@ -328,6 +267,85 @@ public class RecordFBOActivity extends Activity implements SurfaceHolder.Callbac
         }
     }
 
+    @Override
+    public void onSurfaceTextureAvailable(SurfaceTexture surface, int width, int height) {
+
+            Log.d(TAG, "surfaceCreated holder=" + surface);
+
+            File outputFile = new File(getFilesDir(), "fbo-gl-recording.mp4");
+            TextureView sv = (TextureView) findViewById(R.id.fboActivity_surfaceView);
+
+            mRenderThread = new RenderThread(sv.getSurfaceTexture(), new ActivityHandler(this), outputFile,
+                    MiscUtils.getDisplayRefreshNsec(this));
+            mRenderThread.setName("RecordFBO GL render");
+            mRenderThread.start();
+            mRenderThread.waitUntilReady();
+            mRenderThread.setRecordMethod(mSelectedRecordMethod);
+
+            RenderHandler rh = mRenderThread.getHandler();
+            if (rh != null) {
+                rh.sendSurfaceCreated();
+
+                rh.sendSurfaceChanged(0, width, height);
+            }
+
+            // start the draw events
+            Choreographer.getInstance().postFrameCallback(this);
+    }
+
+    @Override
+    public void onSurfaceTextureSizeChanged(SurfaceTexture surface, int width, int height) {
+
+            Log.d(TAG, "kurt onSurfaceTextureSizeChanged");
+            RenderHandler rh = mRenderThread.getHandler();
+
+        if (rh != null) {
+            Log.d(TAG, "kurt onSurfaceTextureSizeChanged RenderHandler not null");
+            rh.sendSurfaceChanged(0, width, height);
+        } else {
+            Log.d(TAG, "kurt onSurfaceTextureSizeChanged RenderHandler  null");
+        }
+
+    }
+
+    @Override
+    public boolean onSurfaceTextureDestroyed(SurfaceTexture surface) {
+            Log.d(TAG, "surfaceDestroyed holder=" + surface);
+
+            // We need to wait for the render thread to shut down before continuing because we
+            // don't want the Surface to disappear out from under it mid-render.  The frame
+            // notifications will have been stopped back in onPause(), but there might have
+            // been one in progress.
+            //
+            // TODO: the RenderThread doesn't currently wait for the encoder / muxer to stop,
+            //       so we can't use this as an indication that the .mp4 file is complete.
+
+            RenderHandler rh = mRenderThread.getHandler();
+            if (rh != null) {
+                rh.sendShutdown();
+                try {
+                    mRenderThread.join();
+                } catch (InterruptedException ie) {
+                    // not expected
+                    throw new RuntimeException("join was interrupted", ie);
+                }
+            }
+            mRenderThread = null;
+            mRecordingEnabled = false;
+
+            // If the callback was posted, remove it.  Without this, we could get one more
+            // call on doFrame().
+            Choreographer.getInstance().removeFrameCallback(this);
+            Log.d(TAG, "surfaceDestroyed complete");
+
+        return false;
+    }
+
+    @Override
+    public void onSurfaceTextureUpdated(SurfaceTexture surface) {
+
+    }
+
 
     /**
      * Handles messages sent from the render thread to the UI thread.
@@ -412,7 +430,7 @@ public class RecordFBOActivity extends Activity implements SurfaceHolder.Callbac
         private Object mStartLock = new Object();
         private boolean mReady = false;
 
-        private volatile SurfaceHolder mSurfaceHolder;  // may be updated by UI thread
+        private volatile SurfaceTexture mSurfaceHolder;  // may be updated by UI thread
         private EglCore mEglCore;
         private WindowSurface mWindowSurface;
         private FlatShadedProgram mProgram;
@@ -450,7 +468,7 @@ public class RecordFBOActivity extends Activity implements SurfaceHolder.Callbac
         private FullFrameRect mFullScreen;
 
         // Used for recording.
-        private boolean mRecordingEnabled;
+        private boolean mRecordingEnabled = false;
         private File mOutputFile;
         private WindowSurface mInputWindowSurface;
         private TextureMovieEncoder2 mVideoEncoder;
@@ -462,7 +480,7 @@ public class RecordFBOActivity extends Activity implements SurfaceHolder.Callbac
         /**
          * Pass in the SurfaceView's SurfaceHolder.  Note the Surface may not yet exist.
          */
-        public RenderThread(SurfaceHolder holder, ActivityHandler ahandler, File outputFile,
+        public RenderThread(SurfaceTexture holder, ActivityHandler ahandler, File outputFile,
                 long refreshPeriodNs) {
             mSurfaceHolder = holder;
             mActivityHandler = ahandler;
@@ -486,7 +504,7 @@ public class RecordFBOActivity extends Activity implements SurfaceHolder.Callbac
         /**
          * Thread entry point.
          * <p>
-         * The thread should not be started until the Surface associated with the SurfaceHolder
+         * The thread should not be started until the Surface associated with the Surface\
          * has been created.  That way we don't have to wait for a separate "surface created"
          * message to arrive.
          */
@@ -494,7 +512,7 @@ public class RecordFBOActivity extends Activity implements SurfaceHolder.Callbac
         public void run() {
             Looper.prepare();
             mHandler = new RenderHandler(this);
-            mEglCore = new EglCore(null, EglCore.FLAG_RECORDABLE | EglCore.FLAG_TRY_GLES3);
+            //mEglCore = new EglCore(null, EglCore.FLAG_TRY_GLES3);
             synchronized (mStartLock) {
                 mReady = true;
                 mStartLock.notify();    // signal waitUntilReady()
@@ -546,18 +564,19 @@ public class RecordFBOActivity extends Activity implements SurfaceHolder.Callbac
          * Prepares the surface.
          */
         private void surfaceCreated() {
-            Surface surface = mSurfaceHolder.getSurface();
-            prepareGl(surface);
+            //Surface surface = mSurfaceHolder.getSurface();
+            //prepareGl(mSurfaceHolder);
         }
 
         /**
          * Prepares window surface and GL state.
          */
-        private void prepareGl(Surface surface) {
+        private void prepareGl(TextureView surface) {
             Log.d(TAG, "prepareGl");
 
-            mWindowSurface = new WindowSurface(mEglCore, surface, false);
-            mWindowSurface.makeCurrent();
+//            mEglCore = new EglCore(null, EglCore.FLAG_TRY_GLES3);
+//            mWindowSurface = new WindowSurface(mEglCore, surface.getSurfaceTexture());
+//            mWindowSurface.makeCurrent();
 
             // Used for blitting texture to FBO.
             mFullScreen = new FullFrameRect(
@@ -576,7 +595,10 @@ public class RecordFBOActivity extends Activity implements SurfaceHolder.Callbac
             // make sure we're defining our shapes correctly.)
             GLES20.glDisable(GLES20.GL_CULL_FACE);
 
-            mActivityHandler.sendGlesVersion(mEglCore.getGlVersion());
+//            mActivityHandler.sendGlesVersion(mEglCore.getGlVersion());
+//
+//            mWindowSurface.release();
+//            mEglCore.release();
         }
 
        /**
@@ -594,7 +616,9 @@ public class RecordFBOActivity extends Activity implements SurfaceHolder.Callbac
 
             // Simple orthographic projection, with (0,0) in lower-left corner.
             Matrix.orthoM(mDisplayProjectionMatrix, 0, 0, width, 0, height, -1, 1);
-
+            for (int k = 0;k<16;++k) {
+                Log.d(TAG, "surfaceChanged mDisplayProjectionMatrix " + k + " " + mDisplayProjectionMatrix[k]);
+            }
             int smallDim = Math.min(width, height);
 
             // Set initial shape size / position / velocity based on window size.  Movement
@@ -698,7 +722,8 @@ public class RecordFBOActivity extends Activity implements SurfaceHolder.Callbac
             // See if GLES is happy with all this.
             int status = GLES20.glCheckFramebufferStatus(GLES20.GL_FRAMEBUFFER);
             if (status != GLES20.GL_FRAMEBUFFER_COMPLETE) {
-                throw new RuntimeException("Framebuffer not complete, status=" + status);
+                //throw new RuntimeException("Framebuffer not complete, status=" + status);
+                Log.e(TAG, "Framebuffer not complete, status=" + status);
             }
 
             // Switch back to the default framebuffer.
@@ -754,12 +779,16 @@ public class RecordFBOActivity extends Activity implements SurfaceHolder.Callbac
          * Updates the recording state.  Stops or starts recording as needed.
          */
         private void setRecordingEnabled(boolean enabled) {
+            Log.d(TAG, "enabled " + enabled);
+            Log.d(TAG, "mRecordingEnabled " + mRecordingEnabled);
             if (enabled == mRecordingEnabled) {
                 return;
             }
             if (enabled) {
+                Log.d(TAG, "startEncoder");
                 startEncoder();
             } else {
+                Log.d(TAG, "stopEncoder");
                 stopEncoder();
             }
             mRecordingEnabled = enabled;
@@ -833,6 +862,9 @@ public class RecordFBOActivity extends Activity implements SurfaceHolder.Callbac
             }
         }
 
+        private Object mLock = new Object();        // guards mSurfaceTexture, mDone
+        private boolean mDone;
+
         /**
          * Advance state and draw frame in response to a vsync event.
          */
@@ -850,8 +882,47 @@ public class RecordFBOActivity extends Activity implements SurfaceHolder.Callbac
             // We can reduce the overhead of recording, as well as the size of the movie,
             // by recording at ~30fps instead of the display refresh rate.  As a quick hack
             // we just record every-other frame, using a "recorded previous" flag.
+            SurfaceTexture surfaceTexture = null;
+
+            // Latch the SurfaceTexture when it becomes available.  We have to wait for
+            // the TextureView to create it.
+            synchronized (mLock) {
+                while (!mDone && (surfaceTexture = mSurfaceHolder) == null) {
+                    try {
+                        mLock.wait();
+                    } catch (InterruptedException ie) {
+                        throw new RuntimeException(ie);     // not expected
+                    }
+                }
+                if (mDone) {
+                    Log.d(TAG, "halt is called");
+                    return;
+                }
+            }
+            Log.d(TAG, "kurt mRecordingEnabled : " + mRecordingEnabled);
+            if (mEglCore == null) {
+                Log.d(TAG, "mEglCore is null");
+
+                mEglCore = new EglCore(null, EglCore.FLAG_TRY_GLES3);
+                mWindowSurface = new WindowSurface(mEglCore, mSurfaceHolder);
+                mWindowSurface.makeCurrent();
+                prepareGl(null);
+
+                setRecordingEnabled(true);
+            } else {
+                Log.d(TAG, "mEglCore is not null");
+            }
+            if (mSurfaceHolder == null) {
+                Log.d(TAG, "SurfaceTexture is null");
+
+                //return;
+            } else {
+                Log.d(TAG, "SurfaceTexture is not null");
+            }
+
 
             update(timeStampNanos);
+
 
             long diff = System.nanoTime() - timeStampNanos;
             long max = mRefreshPeriodNanos - 2000000;   // if we're within 2ms, don't bother
@@ -953,10 +1024,11 @@ public class RecordFBOActivity extends Activity implements SurfaceHolder.Callbac
                 } else {
                     //Log.d(TAG, "MODE: offscreen + blit 2x");
                     // Render offscreen.
+
                     GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, mFramebuffer);
                     GlUtil.checkGlError("glBindFramebuffer");
                     draw();
-
+                    Log.d(TAG, "kurt draw glBindFramebuffer");
                     // Blit to display.
                     GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
                     GlUtil.checkGlError("glBindFramebuffer");
@@ -972,13 +1044,21 @@ public class RecordFBOActivity extends Activity implements SurfaceHolder.Callbac
                             mVideoRect.width(), mVideoRect.height());
                     mFullScreen.drawFrame(mOffscreenTexture, mIdentityMatrix);
                     mInputWindowSurface.setPresentationTime(timeStampNanos);
-                    mInputWindowSurface.swapBuffers();
-
+                    boolean swapRet = mInputWindowSurface.swapBuffers();
+                    Log.d(TAG, "kurt mInputWindowSurface swapRet " + swapRet);
                     // Restore previous values.
                     GLES20.glViewport(0, 0, mWindowSurface.getWidth(), mWindowSurface.getHeight());
                     mWindowSurface.makeCurrent();
                 }
             }
+
+//            mWindowSurface.release();
+//            mEglCore.release();
+//            mEglCore = null;
+//            if (!sReleaseInCallback) {
+//                Log.i(TAG, "Releasing SurfaceTexture in renderer thread");
+//                surfaceTexture.release();
+//            }
 
             mPreviousWasDropped = false;
 
@@ -1077,7 +1157,10 @@ public class RecordFBOActivity extends Activity implements SurfaceHolder.Callbac
             // the pillar-/letter-boxing.
             GLES20.glClearColor(0.2f, 0.2f, 0.2f, 1.0f);
             GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
-
+//            Log.d(TAG, "kurt 2 mProgram " + mProgram);
+//            for (int k = 0;k<16;++k) {
+//                Log.d(TAG, "draw mDisplayProjectionMatrix " + k + " " + mDisplayProjectionMatrix[k]);
+//            }
             mTri.draw(mProgram, mDisplayProjectionMatrix);
             mRect.draw(mProgram, mDisplayProjectionMatrix);
             for (int i = 0; i < 4; i++) {
